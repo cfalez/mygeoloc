@@ -1,0 +1,324 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1,viewport-fit=cover">
+<meta name="theme-color" content="#1f3a5f">
+<meta name="apple-mobile-web-app-capable" content="yes">
+<meta name="mobile-web-app-capable" content="yes">
+<title>Porte à porte</title>
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.css">
+<style>
+:root{--blue:#1f3a5f;--accent:#ff6b35;--bg:#fff;--ink:#14202e;--muted:#5b6b7d;--line:#e3e8ee;--danger:#c62828}
+@media(prefers-color-scheme:dark){:root{--bg:#121a24;--ink:#e8eef5;--muted:#9aabbd;--line:#2a3646;--danger:#ff6b6b}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{font:16px/1.45 system-ui,-apple-system,"Segoe UI",Roboto,sans-serif;color:var(--ink);background:var(--bg);overflow:hidden}
+button{font:inherit;cursor:pointer}
+#map{position:fixed;inset:0;z-index:0}
+
+header{position:fixed;top:0;left:0;right:0;z-index:1000;display:flex;align-items:center;gap:10px;
+  padding:calc(env(safe-area-inset-top) + 10px) 14px 10px;background:var(--blue);color:#fff;box-shadow:0 2px 10px rgba(0,0,0,.25)}
+header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+#gps{font-size:13px;white-space:nowrap;display:flex;align-items:center;gap:6px;opacity:.9}
+#gps i{width:9px;height:9px;border-radius:50%;background:#9aa7b5}
+#gps.ok i{background:#4cd964}#gps.ko i{background:#ff5a5a}
+#listBtn{min-height:40px;padding:0 14px;border:1px solid rgba(255,255,255,.35);border-radius:10px;background:rgba(255,255,255,.12);color:#fff;font-weight:600;white-space:nowrap}
+
+#ring{position:fixed;z-index:1000;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 26px);
+  display:flex;align-items:center;gap:10px;padding:16px 28px;border:0;border-radius:999px;background:var(--accent);color:#fff;
+  font-weight:700;font-size:18px;box-shadow:0 6px 20px rgba(255,107,53,.45),0 2px 6px rgba(0,0,0,.25);white-space:nowrap}
+#ring:active{transform:translateX(-50%) scale(.96)}
+#ring:disabled{opacity:.75}
+#ring svg{width:22px;height:22px}
+
+.pin span{display:block;width:28px;height:28px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);
+  background:var(--accent);border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35);position:relative}
+.pin span::after{content:"";position:absolute;inset:7px;border-radius:50%;background:#fff}
+.pin.moving span{background:#2b7cff}
+
+.leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--bg);color:var(--ink)}
+.leaflet-popup-content{margin:14px 16px}
+.pop .addr{font-weight:700;font-size:16px;line-height:1.3;margin-bottom:4px}
+.pop .meta{color:var(--muted);font-size:13px;margin-bottom:10px}
+.pop label{display:block;font-size:13px;color:var(--muted);margin-bottom:4px}
+.pop textarea{width:100%;font:16px/1.4 inherit;padding:8px;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink);resize:vertical}
+.pop .acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
+.pop .acts button,.sheet .acts button{min-height:40px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--ink);font-size:14px}
+.pop .acts .danger,.sheet .acts .danger{color:var(--danger);border-color:currentColor}
+
+#backdrop{position:fixed;inset:0;z-index:1100;background:rgba(0,0,0,.35);opacity:0;pointer-events:none;transition:opacity .2s}
+#backdrop.open{opacity:1;pointer-events:auto}
+.sheet{position:fixed;left:0;right:0;bottom:0;z-index:1200;max-height:75vh;display:flex;flex-direction:column;background:var(--bg);
+  border-radius:16px 16px 0 0;box-shadow:0 -6px 24px rgba(0,0,0,.25);transform:translateY(105%);transition:transform .25s ease;
+  padding-bottom:env(safe-area-inset-bottom)}
+.sheet.open{transform:none}
+.sheet .head{display:flex;align-items:center;padding:14px 16px 8px}
+.sheet h2{font-size:18px;margin:0;flex:1}
+.sheet .close{width:40px;height:40px;border:0;background:transparent;color:var(--ink);font-size:24px;line-height:1}
+.sheet ul{list-style:none;margin:0;padding:0 8px;overflow:auto;flex:1}
+.sheet li button{display:block;width:100%;text-align:left;padding:12px 10px;border:0;border-bottom:1px solid var(--line);background:transparent;color:var(--ink)}
+.sheet li b{display:block;font-size:15px}
+.sheet li small{color:var(--muted);font-size:13px}
+.sheet li em{display:block;font-style:normal;font-size:13px;color:var(--muted);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.sheet .empty{padding:24px 16px;color:var(--muted)}
+.sheet .acts{display:flex;flex-wrap:wrap;gap:8px;padding:12px 16px;border-top:1px solid var(--line)}
+
+#toast{position:fixed;z-index:1300;left:50%;bottom:calc(env(safe-area-inset-bottom) + 96px);transform:translateX(-50%) translateY(10px);
+  max-width:min(92vw,420px);padding:10px 16px;border-radius:10px;background:#14202e;color:#fff;font-size:14px;text-align:center;
+  opacity:0;pointer-events:none;transition:opacity .2s,transform .2s}
+#toast.show{opacity:1;transform:translateX(-50%)}
+@media(prefers-reduced-motion:reduce){.sheet,#toast,#backdrop{transition:none}}
+</style>
+</head>
+<body>
+<header>
+  <h1>Porte à porte</h1>
+  <span id="gps"><i></i><span>GPS…</span></span>
+  <button id="listBtn" type="button">Liste (0)</button>
+</header>
+
+<div id="map"></div>
+
+<button id="ring" type="button">
+  <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></svg>
+  <span>Je sonne ici</span>
+</button>
+
+<div id="backdrop"></div>
+<section class="sheet" id="sheet" aria-label="Liste des portes">
+  <div class="head"><h2 id="sheetTitle">Portes visitées</h2><button class="close" id="closeSheet" type="button" aria-label="Fermer">×</button></div>
+  <ul id="list"></ul>
+  <div class="acts">
+    <button type="button" id="expCsv">Exporter CSV</button>
+    <button type="button" id="expJson">Sauvegarde JSON</button>
+    <button type="button" id="impJson">Importer JSON</button>
+    <button type="button" id="clearAll" class="danger">Tout effacer</button>
+    <input type="file" id="impFile" accept=".json,application/json" hidden>
+  </div>
+</section>
+
+<div id="toast" role="status"></div>
+
+<script src="https://cdnjs.cloudflare.com/ajax/libs/leaflet/1.9.4/leaflet.min.js"></script>
+<script>
+{
+  const KEY = 'pap-points-v1';
+  const $ = id => document.getElementById(id);
+  const esc = s => String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+  const fmt = iso => new Date(iso).toLocaleString('fr-FR', {day:'2-digit', month:'2-digit', year:'numeric', hour:'2-digit', minute:'2-digit'});
+
+  let points = [];
+  try { points = JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { points = []; }
+  const save = () => { try { localStorage.setItem(KEY, JSON.stringify(points)); } catch (e) { toast('Sauvegarde impossible sur cet appareil'); } };
+
+  let toastTimer;
+  function toast(msg, ms = 3000) {
+    const t = $('toast'); t.textContent = msg; t.classList.add('show');
+    clearTimeout(toastTimer); toastTimer = setTimeout(() => t.classList.remove('show'), ms);
+  }
+
+  // ---------- Carte ----------
+  const map = L.map('map', {zoomControl: false}).setView([46.6, 2.4], 6);
+  L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
+    maxZoom: 19, attribution: '© OpenStreetMap'
+  }).addTo(map);
+
+  // ---------- Position en direct ----------
+  let me = null, meAcc = null, lastPos = null, centered = false;
+  function setGps(acc, err) {
+    const g = $('gps');
+    g.className = acc != null ? 'ok' : (err ? 'ko' : '');
+    g.lastChild.textContent = acc != null ? `GPS ±${Math.round(acc)} m` : (err ? 'GPS indisponible' : 'GPS…');
+  }
+  function geoError(e) {
+    if (!e) return 'Localisation impossible';
+    if (e.code === 1) return 'Autorise la localisation pour ce site dans ton navigateur';
+    if (e.code === 2) return 'Position introuvable, essaie à découvert';
+    if (e.code === 3) return 'Le GPS met trop de temps, réessaie';
+    return 'Localisation impossible';
+  }
+  if (!window.isSecureContext) toast('La localisation exige une adresse en https', 6000);
+  if ('geolocation' in navigator) {
+    navigator.geolocation.watchPosition(p => {
+      lastPos = p;
+      const ll = [p.coords.latitude, p.coords.longitude];
+      if (!me) {
+        meAcc = L.circle(ll, {radius: p.coords.accuracy, stroke: false, fillColor: '#2b7cff', fillOpacity: .12, interactive: false}).addTo(map);
+        me = L.circleMarker(ll, {radius: 8, color: '#fff', weight: 3, fillColor: '#2b7cff', fillOpacity: 1, interactive: false}).addTo(map);
+      } else { me.setLatLng(ll); meAcc.setLatLng(ll).setRadius(p.coords.accuracy); }
+      if (!centered) { map.setView(ll, 18); centered = true; }
+      setGps(p.coords.accuracy);
+    }, e => setGps(null, e), {enableHighAccuracy: true, maximumAge: 3000, timeout: 20000});
+  } else setGps(null, true);
+
+  // ---------- Adresse à partir des coordonnées ----------
+  async function geocode(lat, lng) {
+    const urls = [
+      `https://data.geopf.fr/geocodage/reverse?lon=${lng}&lat=${lat}&limit=1`,
+      `https://api-adresse.data.gouv.fr/reverse/?lon=${lng}&lat=${lat}&limit=1`
+    ];
+    for (const u of urls) {
+      try {
+        const r = await fetch(u); if (!r.ok) continue;
+        const j = await r.json(); const f = j.features && j.features[0];
+        if (f && f.properties && f.properties.label) return f.properties.label;
+      } catch (e) {}
+    }
+    try { // repli hors France : OpenStreetMap Nominatim
+      const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&lat=${lat}&lon=${lng}`, {headers: {'Accept-Language': 'fr'}});
+      if (r.ok) { const j = await r.json(); if (j.display_name) return j.display_name; }
+    } catch (e) {}
+    return null;
+  }
+
+  // ---------- Points ----------
+  const markers = {};
+  const icon = moving => L.divIcon({className: 'pin' + (moving ? ' moving' : ''), html: '<span></span>', iconSize: [28, 36], iconAnchor: [14, 34], popupAnchor: [0, -30]});
+  const addrText = pt => pt.adresse || 'Recherche de l’adresse…';
+
+  function refreshAddr(pt) {
+    document.querySelectorAll('.addr').forEach(el => { if (el.dataset.id === pt.id) el.textContent = addrText(pt); });
+  }
+
+  function popup(pt) {
+    const d = document.createElement('div'); d.className = 'pop';
+    d.innerHTML = `
+      <div class="addr" data-id="${esc(pt.id)}">${esc(addrText(pt))}</div>
+      <div class="meta">Sonné le ${esc(fmt(pt.date))}${pt.acc ? ` · GPS ±${esc(pt.acc)} m` : ''}</div>
+      <label for="n-${esc(pt.id)}">Note</label>
+      <textarea id="n-${esc(pt.id)}" rows="3" placeholder="Ce que tu veux retenir…">${esc(pt.note)}</textarea>
+      <div class="acts">
+        <button type="button" data-a="move">Déplacer</button>
+        <button type="button" data-a="geo">Revoir l’adresse</button>
+        <button type="button" data-a="del" class="danger">Supprimer</button>
+      </div>`;
+    const ta = d.querySelector('textarea');
+    ta.addEventListener('input', () => { pt.note = ta.value; save(); });
+    ta.addEventListener('change', renderList);
+    d.addEventListener('click', e => {
+      const a = e.target.dataset && e.target.dataset.a; if (!a) return;
+      const m = markers[pt.id];
+      if (a === 'move') { m.closePopup(); m.setIcon(icon(true)); m.dragging.enable(); toast('Fais glisser le point à sa bonne place'); }
+      if (a === 'geo') locate(pt);
+      if (a === 'del' && confirm('Supprimer ce point ?')) {
+        map.removeLayer(m); delete markers[pt.id];
+        points = points.filter(p => p.id !== pt.id); save(); renderList();
+      }
+    });
+    L.DomEvent.disableClickPropagation(d);
+    return d;
+  }
+
+  function draw(pt) {
+    const m = L.marker([pt.lat, pt.lng], {icon: icon(false), draggable: true, autoPan: true}).addTo(map);
+    m.dragging.disable();
+    m.bindPopup(() => popup(pt), {minWidth: 240, maxWidth: 300});
+    m.on('dragend', () => {
+      const ll = m.getLatLng(); pt.lat = ll.lat; pt.lng = ll.lng; pt.acc = null;
+      m.dragging.disable(); m.setIcon(icon(false)); save(); m.openPopup(); locate(pt);
+    });
+    markers[pt.id] = m;
+    return m;
+  }
+
+  async function locate(pt) {
+    pt.adresse = ''; refreshAddr(pt);
+    const a = await geocode(pt.lat, pt.lng);
+    pt.adresse = a || `${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)} (adresse non trouvée)`;
+    save(); refreshAddr(pt); renderList();
+  }
+
+  function addPoint(lat, lng, acc) {
+    const pt = {id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), lat, lng,
+      acc: acc ? Math.round(acc) : null, adresse: '', date: new Date().toISOString(), note: ''};
+    points.push(pt); save(); renderList();
+    const m = draw(pt);
+    map.setView([lat, lng], Math.max(map.getZoom(), 18));
+    m.openPopup();
+    locate(pt);
+  }
+
+  // ---------- Bouton « Je sonne ici » ----------
+  const ring = $('ring'), ringLabel = ring.querySelector('span');
+  ring.addEventListener('click', () => {
+    const use = p => addPoint(p.coords.latitude, p.coords.longitude, p.coords.accuracy);
+    if (lastPos && Date.now() - lastPos.timestamp < 10000) return use(lastPos);
+    if (!('geolocation' in navigator)) return toast('Ce navigateur ne donne pas la position');
+    ring.disabled = true; ringLabel.textContent = 'Localisation…';
+    const done = () => { ring.disabled = false; ringLabel.textContent = 'Je sonne ici'; };
+    navigator.geolocation.getCurrentPosition(p => { done(); use(p); }, e => { done(); toast(geoError(e), 4500); },
+      {enableHighAccuracy: true, timeout: 15000, maximumAge: 0});
+  });
+
+  // Appui long (ou clic droit) sur la carte : placer un point à la main
+  map.on('contextmenu', e => addPoint(e.latlng.lat, e.latlng.lng, null));
+
+  // ---------- Liste ----------
+  function openSheet(open) { $('sheet').classList.toggle('open', open); $('backdrop').classList.toggle('open', open); }
+  $('listBtn').addEventListener('click', () => openSheet(true));
+  $('closeSheet').addEventListener('click', () => openSheet(false));
+  $('backdrop').addEventListener('click', () => openSheet(false));
+
+  function renderList() {
+    $('listBtn').textContent = `Liste (${points.length})`;
+    $('sheetTitle').textContent = points.length > 1 ? `${points.length} portes visitées` : `${points.length} porte visitée`;
+    const sorted = [...points].sort((a, b) => b.date.localeCompare(a.date));
+    $('list').innerHTML = sorted.length ? sorted.map(p => `
+      <li><button type="button" data-id="${esc(p.id)}">
+        <b>${esc(addrText(p))}</b><small>${esc(fmt(p.date))}</small>${p.note ? `<em>${esc(p.note)}</em>` : ''}
+      </button></li>`).join('')
+      : '<li class="empty">Aucune porte pour l’instant. Appuie sur « Je sonne ici » devant une porte.</li>';
+  }
+  $('list').addEventListener('click', e => {
+    const b = e.target.closest('button[data-id]'); if (!b) return;
+    const m = markers[b.dataset.id]; if (!m) return;
+    openSheet(false); map.setView(m.getLatLng(), 18); m.openPopup();
+  });
+
+  // ---------- Export / import ----------
+  function download(name, text, type) {
+    const url = URL.createObjectURL(new Blob([text], {type}));
+    const a = document.createElement('a'); a.href = url; a.download = name; document.body.appendChild(a); a.click();
+    setTimeout(() => { URL.revokeObjectURL(url); a.remove(); }, 1000);
+  }
+  const stamp = () => new Date().toISOString().slice(0, 10);
+  $('expJson').addEventListener('click', () => download(`porte-a-porte-${stamp()}.json`, JSON.stringify(points, null, 2), 'application/json'));
+  $('expCsv').addEventListener('click', () => {
+    const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
+    const rows = [['id', 'date', 'adresse', 'latitude', 'longitude', 'precision_m', 'note'].join(';')]
+      .concat(points.map(p => [p.id, fmt(p.date), p.adresse, p.lat, p.lng, p.acc ?? '', p.note].map(q).join(';')));
+    download(`porte-a-porte-${stamp()}.csv`, '﻿' + rows.join('\r\n'), 'text/csv;charset=utf-8');
+  });
+  $('impJson').addEventListener('click', () => $('impFile').click());
+  $('impFile').addEventListener('change', async e => {
+    const f = e.target.files[0]; if (!f) return;
+    try {
+      const data = JSON.parse(await f.text());
+      if (!Array.isArray(data)) throw 0;
+      let n = 0;
+      for (const p of data) {
+        if (!p || !p.id || typeof p.lat !== 'number' || typeof p.lng !== 'number' || points.some(x => x.id === p.id)) continue;
+        const pt = {id: String(p.id), lat: p.lat, lng: p.lng, acc: p.acc ?? null, adresse: String(p.adresse ?? ''), date: p.date || new Date().toISOString(), note: String(p.note ?? '')};
+        points.push(pt); draw(pt); n++;
+      }
+      save(); renderList(); toast(`${n} point(s) importé(s)`);
+    } catch (err) { toast('Fichier non reconnu'); }
+    e.target.value = '';
+  });
+  $('clearAll').addEventListener('click', () => {
+    if (!points.length || !confirm('Effacer toutes les portes ? Pense à exporter avant.')) return;
+    Object.values(markers).forEach(m => map.removeLayer(m));
+    for (const k in markers) delete markers[k];
+    points = []; save(); renderList();
+  });
+
+  // ---------- Démarrage ----------
+  points.forEach(draw);
+  renderList();
+  if (points.length && !centered) map.fitBounds(L.latLngBounds(points.map(p => [p.lat, p.lng])).pad(.2), {maxZoom: 18});
+  setTimeout(() => toast('Astuce : appui long sur la carte pour placer un point à la main', 4000), 1500);
+}
+</script>
+</body>
+</html>
