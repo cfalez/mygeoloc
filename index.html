@@ -23,7 +23,7 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
 #gps{font-size:13px;white-space:nowrap;display:flex;align-items:center;gap:6px;opacity:.9}
 #gps i{width:9px;height:9px;border-radius:50%;background:#9aa7b5}
 #gps.ok i{background:#4cd964}#gps.ko i{background:#ff5a5a}
-#listBtn{min-height:40px;padding:0 14px;border:1px solid rgba(255,255,255,.35);border-radius:10px;background:rgba(255,255,255,.12);color:#fff;font-weight:600;white-space:nowrap}
+#listBtn,#streetBtn{min-height:40px;padding:0 12px;border:1px solid rgba(255,255,255,.35);border-radius:10px;background:rgba(255,255,255,.12);color:#fff;font-weight:600;white-space:nowrap}
 
 #ring{position:fixed;z-index:1000;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 26px);
   display:flex;align-items:center;gap:10px;padding:16px 28px;border:0;border-radius:999px;background:var(--accent);color:#fff;
@@ -35,6 +35,7 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
 .pin span{display:block;width:28px;height:28px;border-radius:50% 50% 50% 0;transform:rotate(-45deg);
   background:var(--accent);border:3px solid #fff;box-shadow:0 2px 6px rgba(0,0,0,.35);position:relative}
 .pin span::after{content:"";position:absolute;inset:7px;border-radius:50%;background:#fff}
+.pin.todo span{background:#8a97a6}
 .pin.moving span{background:#2b7cff}
 
 .leaflet-popup-content-wrapper,.leaflet-popup-tip{background:var(--bg);color:var(--ink)}
@@ -46,6 +47,11 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
 .pop .acts{display:flex;flex-wrap:wrap;gap:6px;margin-top:10px}
 .pop .acts button,.sheet .acts button{min-height:40px;padding:0 12px;border:1px solid var(--line);border-radius:8px;background:transparent;color:var(--ink);font-size:14px}
 .pop .acts .danger,.sheet .acts .danger{color:var(--danger);border-color:currentColor}
+.pop .acts .primary{background:var(--accent);border-color:var(--accent);color:#fff;font-weight:700;width:100%}
+.street{display:flex;gap:8px;padding:0 16px}
+.street input{flex:1;min-height:44px;padding:0 10px;font:16px inherit;border:1px solid var(--line);border-radius:8px;background:var(--bg);color:var(--ink)}
+.street button{min-height:44px;padding:0 14px;border:0;border-radius:8px;background:var(--blue);color:#fff;font-weight:600}
+.hint{margin:10px 16px;color:var(--muted);font-size:14px}
 
 #backdrop{position:fixed;inset:0;z-index:1100;background:rgba(0,0,0,.35);opacity:0;pointer-events:none;transition:opacity .2s}
 #backdrop.open{opacity:1;pointer-events:auto}
@@ -75,6 +81,7 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
 <header>
   <h1>Porte à porte</h1>
   <span id="gps"><i></i><span>GPS…</span></span>
+  <button id="streetBtn" type="button">Rue</button>
   <button id="listBtn" type="button">Liste (0)</button>
 </header>
 
@@ -87,15 +94,26 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
 
 <div id="backdrop"></div>
 <section class="sheet" id="sheet" aria-label="Liste des portes">
-  <div class="head"><h2 id="sheetTitle">Portes visitées</h2><button class="close" id="closeSheet" type="button" aria-label="Fermer">×</button></div>
+  <div class="head"><h2 id="sheetTitle">Portes visitées</h2><button class="close" data-close type="button" aria-label="Fermer">×</button></div>
   <ul id="list"></ul>
   <div class="acts">
     <button type="button" id="expCsv">Exporter CSV</button>
     <button type="button" id="expJson">Sauvegarde JSON</button>
     <button type="button" id="impJson">Importer JSON</button>
+    <button type="button" id="clearTodo">Retirer les non visitées</button>
     <button type="button" id="clearAll" class="danger">Tout effacer</button>
     <input type="file" id="impFile" accept=".json,application/json" hidden>
   </div>
+</section>
+
+<section class="sheet" id="streetSheet" aria-label="Ajouter une rue">
+  <div class="head"><h2>Ajouter les adresses d’une rue</h2><button class="close" data-close type="button" aria-label="Fermer">×</button></div>
+  <form class="street" id="streetForm">
+    <input id="streetQ" type="search" value="Rue Jean-Baptiste Lebas, 59493 Villeneuve-d'Ascq" aria-label="Rue et ville" autocomplete="off">
+    <button type="submit">Chercher</button>
+  </form>
+  <p class="hint" id="streetMsg">Tape la rue et la ville, puis choisis la bonne rue dans la liste.</p>
+  <ul id="streetList"></ul>
 </section>
 
 <div id="toast" role="status"></div>
@@ -110,6 +128,8 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
 
   let points = [];
   try { points = JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { points = []; }
+  points.forEach(p => { if (!p.etat) p.etat = 'sonne'; });   // 'prevu' = à visiter, 'sonne' = visité
+  const norm = s => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(points)); } catch (e) { toast('Sauvegarde impossible sur cet appareil'); } };
 
   let toastTimer;
@@ -174,7 +194,7 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
 
   // ---------- Points ----------
   const markers = {};
-  const icon = moving => L.divIcon({className: 'pin' + (moving ? ' moving' : ''), html: '<span></span>', iconSize: [28, 36], iconAnchor: [14, 34], popupAnchor: [0, -30]});
+  const icon = (moving, etat) => L.divIcon({className: 'pin' + (etat === 'prevu' ? ' todo' : '') + (moving ? ' moving' : ''), html: '<span></span>', iconSize: [28, 36], iconAnchor: [14, 34], popupAnchor: [0, -30]});
   const addrText = pt => pt.adresse || 'Recherche de l’adresse…';
 
   function refreshAddr(pt) {
@@ -185,10 +205,11 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
     const d = document.createElement('div'); d.className = 'pop';
     d.innerHTML = `
       <div class="addr" data-id="${esc(pt.id)}">${esc(addrText(pt))}</div>
-      <div class="meta">Sonné le ${esc(fmt(pt.date))}${pt.acc ? ` · GPS ±${esc(pt.acc)} m` : ''}</div>
+      <div class="meta">${pt.etat === 'prevu' ? 'À visiter' : `Sonné le ${esc(fmt(pt.date))}`}${pt.acc ? ` · GPS ±${esc(pt.acc)} m` : ''}</div>
       <label for="n-${esc(pt.id)}">Note</label>
       <textarea id="n-${esc(pt.id)}" rows="3" placeholder="Ce que tu veux retenir…">${esc(pt.note)}</textarea>
       <div class="acts">
+        ${pt.etat === 'prevu' ? '<button type="button" data-a="ring" class="primary">J’ai sonné ici</button>' : ''}
         <button type="button" data-a="move">Déplacer</button>
         <button type="button" data-a="geo">Revoir l’adresse</button>
         <button type="button" data-a="del" class="danger">Supprimer</button>
@@ -199,7 +220,11 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
     d.addEventListener('click', e => {
       const a = e.target.dataset && e.target.dataset.a; if (!a) return;
       const m = markers[pt.id];
-      if (a === 'move') { m.closePopup(); m.setIcon(icon(true)); m.dragging.enable(); toast('Fais glisser le point à sa bonne place'); }
+      if (a === 'ring') {
+        pt.etat = 'sonne'; pt.date = new Date().toISOString(); save();
+        m.setIcon(icon(false, pt.etat)); m.closePopup(); m.openPopup(); renderList();
+      }
+      if (a === 'move') { m.closePopup(); m.setIcon(icon(true, pt.etat)); m.dragging.enable(); toast('Fais glisser le point à sa bonne place'); }
       if (a === 'geo') locate(pt);
       if (a === 'del' && confirm('Supprimer ce point ?')) {
         map.removeLayer(m); delete markers[pt.id];
@@ -211,12 +236,13 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
   }
 
   function draw(pt) {
-    const m = L.marker([pt.lat, pt.lng], {icon: icon(false), draggable: true, autoPan: true}).addTo(map);
+    const m = L.marker([pt.lat, pt.lng], {icon: icon(false, pt.etat), draggable: true, autoPan: true}).addTo(map);
     m.dragging.disable();
     m.bindPopup(() => popup(pt), {minWidth: 240, maxWidth: 300});
     m.on('dragend', () => {
       const ll = m.getLatLng(); pt.lat = ll.lat; pt.lng = ll.lng; pt.acc = null;
-      m.dragging.disable(); m.setIcon(icon(false)); save(); m.openPopup(); locate(pt);
+      m.dragging.disable(); m.setIcon(icon(false, pt.etat)); save(); m.openPopup();
+      if (pt.etat !== 'prevu') locate(pt);   // une adresse de la BAN garde son libellé officiel
     });
     markers[pt.id] = m;
     return m;
@@ -231,7 +257,7 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
 
   function addPoint(lat, lng, acc) {
     const pt = {id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), lat, lng,
-      acc: acc ? Math.round(acc) : null, adresse: '', date: new Date().toISOString(), note: ''};
+      acc: acc ? Math.round(acc) : null, adresse: '', date: new Date().toISOString(), note: '', etat: 'sonne'};
     points.push(pt); save(); renderList();
     const m = draw(pt);
     map.setView([lat, lng], Math.max(map.getZoom(), 18));
@@ -255,25 +281,33 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
   map.on('contextmenu', e => addPoint(e.latlng.lat, e.latlng.lng, null));
 
   // ---------- Liste ----------
-  function openSheet(open) { $('sheet').classList.toggle('open', open); $('backdrop').classList.toggle('open', open); }
-  $('listBtn').addEventListener('click', () => openSheet(true));
-  $('closeSheet').addEventListener('click', () => openSheet(false));
-  $('backdrop').addEventListener('click', () => openSheet(false));
+  function openSheet(id) {
+    document.querySelectorAll('.sheet').forEach(s => s.classList.toggle('open', s.id === id));
+    $('backdrop').classList.toggle('open', !!id);
+  }
+  $('listBtn').addEventListener('click', () => openSheet('sheet'));
+  $('streetBtn').addEventListener('click', () => openSheet('streetSheet'));
+  document.querySelectorAll('[data-close]').forEach(b => b.addEventListener('click', () => openSheet(null)));
+  $('backdrop').addEventListener('click', () => openSheet(null));
 
   function renderList() {
-    $('listBtn').textContent = `Liste (${points.length})`;
-    $('sheetTitle').textContent = points.length > 1 ? `${points.length} portes visitées` : `${points.length} porte visitée`;
-    const sorted = [...points].sort((a, b) => b.date.localeCompare(a.date));
+    const done = points.filter(p => p.etat !== 'prevu').length, todo = points.length - done;
+    $('listBtn').textContent = todo ? `Liste (${done}/${points.length})` : `Liste (${points.length})`;
+    $('sheetTitle').textContent = (done > 1 ? `${done} portes visitées` : `${done} porte visitée`) + (todo ? ` · ${todo} à visiter` : '');
+    const sorted = [...points].sort((a, b) =>
+      (a.etat === 'prevu') - (b.etat === 'prevu') ||
+      (a.etat === 'prevu' ? (a.num || 0) - (b.num || 0) || addrText(a).localeCompare(addrText(b), 'fr', {numeric: true})
+                          : String(b.date).localeCompare(String(a.date))));
     $('list').innerHTML = sorted.length ? sorted.map(p => `
       <li><button type="button" data-id="${esc(p.id)}">
-        <b>${esc(addrText(p))}</b><small>${esc(fmt(p.date))}</small>${p.note ? `<em>${esc(p.note)}</em>` : ''}
+        <b>${esc(addrText(p))}</b><small>${p.etat === 'prevu' ? 'À visiter' : esc(fmt(p.date))}</small>${p.note ? `<em>${esc(p.note)}</em>` : ''}
       </button></li>`).join('')
       : '<li class="empty">Aucune porte pour l’instant. Appuie sur « Je sonne ici » devant une porte.</li>';
   }
   $('list').addEventListener('click', e => {
     const b = e.target.closest('button[data-id]'); if (!b) return;
     const m = markers[b.dataset.id]; if (!m) return;
-    openSheet(false); map.setView(m.getLatLng(), 18); m.openPopup();
+    openSheet(null); map.setView(m.getLatLng(), 18); m.openPopup();
   });
 
   // ---------- Export / import ----------
@@ -286,8 +320,8 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
   $('expJson').addEventListener('click', () => download(`porte-a-porte-${stamp()}.json`, JSON.stringify(points, null, 2), 'application/json'));
   $('expCsv').addEventListener('click', () => {
     const q = v => `"${String(v ?? '').replace(/"/g, '""')}"`;
-    const rows = [['id', 'date', 'adresse', 'latitude', 'longitude', 'precision_m', 'note'].join(';')]
-      .concat(points.map(p => [p.id, fmt(p.date), p.adresse, p.lat, p.lng, p.acc ?? '', p.note].map(q).join(';')));
+    const rows = [['id', 'etat', 'date', 'adresse', 'latitude', 'longitude', 'precision_m', 'note'].join(';')]
+      .concat(points.map(p => [p.id, p.etat === 'prevu' ? 'à visiter' : 'sonné', p.date ? fmt(p.date) : '', p.adresse, p.lat, p.lng, p.acc ?? '', p.note].map(q).join(';')));
     download(`porte-a-porte-${stamp()}.csv`, '﻿' + rows.join('\r\n'), 'text/csv;charset=utf-8');
   });
   $('impJson').addEventListener('click', () => $('impFile').click());
@@ -299,7 +333,9 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
       let n = 0;
       for (const p of data) {
         if (!p || !p.id || typeof p.lat !== 'number' || typeof p.lng !== 'number' || points.some(x => x.id === p.id)) continue;
-        const pt = {id: String(p.id), lat: p.lat, lng: p.lng, acc: p.acc ?? null, adresse: String(p.adresse ?? ''), date: p.date || new Date().toISOString(), note: String(p.note ?? '')};
+        const etat = p.etat === 'prevu' ? 'prevu' : 'sonne';
+        const pt = {id: String(p.id), lat: p.lat, lng: p.lng, acc: p.acc ?? null, adresse: String(p.adresse ?? ''),
+          date: p.date || (etat === 'prevu' ? null : new Date().toISOString()), note: String(p.note ?? ''), etat, num: p.num ?? null};
         points.push(pt); draw(pt); n++;
       }
       save(); renderList(); toast(`${n} point(s) importé(s)`);
@@ -312,6 +348,87 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
     for (const k in markers) delete markers[k];
     points = []; save(); renderList();
   });
+  $('clearTodo').addEventListener('click', () => {
+    const todo = points.filter(p => p.etat === 'prevu');
+    if (!todo.length || !confirm(`Retirer les ${todo.length} adresse(s) pas encore visitée(s) ?`)) return;
+    todo.forEach(p => { map.removeLayer(markers[p.id]); delete markers[p.id]; });
+    points = points.filter(p => p.etat !== 'prevu'); save(); renderList();
+  });
+
+  // ---------- Ajouter toutes les adresses d'une rue ----------
+  const GEO = 'https://data.geopf.fr/geocodage/search';
+  async function geoSearch(params) {
+    const r = await fetch(GEO + '?' + new URLSearchParams({index: 'address', ...params}));
+    if (!r.ok) {
+      if (params.limit > 20) return geoSearch({...params, limit: 20});
+      throw new Error('HTTP ' + r.status);
+    }
+    return (await r.json()).features || [];
+  }
+  const streetMsg = t => { $('streetMsg').textContent = t; };
+  let streetResults = [];
+
+  $('streetForm').addEventListener('submit', async e => {
+    e.preventDefault();
+    const q = $('streetQ').value.trim(); if (q.length < 3) return;
+    streetMsg('Recherche de la rue…'); $('streetList').innerHTML = '';
+    try {
+      streetResults = (await geoSearch({q, type: 'street', limit: 5})).filter(f => f.properties);
+      if (!streetResults.length) return streetMsg('Aucune rue trouvée. Vérifie l’orthographe ou ajoute la ville.');
+      streetMsg('Choisis la rue :');
+      $('streetList').innerHTML = streetResults.map((f, i) => `
+        <li><button type="button" data-i="${i}"><b>${esc(f.properties.name)}</b><small>${esc(f.properties.postcode)} ${esc(f.properties.city)}</small></button></li>`).join('');
+    } catch (err) { streetMsg('Le service d’adresses ne répond pas. Vérifie ta connexion et réessaie.'); }
+  });
+
+  $('streetList').addEventListener('click', e => {
+    const b = e.target.closest('button[data-i]'); if (b) loadStreet(streetResults[+b.dataset.i].properties);
+  });
+
+  async function loadStreet(s) {
+    $('streetList').innerHTML = '';
+    streetMsg(`Récupération des numéros de ${s.name}…`);
+    const found = new Map();
+    const add = (num, lat, lng, label) => {
+      const k = norm(num).replace(/ /g, '');
+      if (k && !found.has(k) && isFinite(lat) && isFinite(lng)) found.set(k, {num: String(num), lat, lng, label});
+    };
+    // 1) Base Adresse Nationale : une requête par chiffre de tête pour dépasser la limite de 50 résultats
+    const queries = ['', '1', '2', '3', '4', '5', '6', '7', '8', '9'].map(d => (d ? d + ' ' : '') + s.name);
+    const res = await Promise.allSettled(queries.map(q => geoSearch({q, type: 'housenumber', citycode: s.citycode, limit: 50})));
+    for (const r of res) if (r.status === 'fulfilled') for (const f of r.value) {
+      const p = f.properties || {};
+      if (norm(p.street) === norm(s.name) && p.housenumber) add(p.housenumber, f.geometry.coordinates[1], f.geometry.coordinates[0], p.label);
+    }
+    // 2) Complément OpenStreetMap, pour les numéros qui manqueraient
+    try {
+      const re = s.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/"/g, '\\"');
+      const ql = `[out:json][timeout:25];area["ref:INSEE"="${s.citycode}"]["boundary"="administrative"]->.a;nwr(area.a)["addr:housenumber"]["addr:street"~"^${re}$",i];out center;`;
+      const r = await fetch('https://overpass-api.de/api/interpreter', {method: 'POST', body: new URLSearchParams({data: ql})});
+      if (r.ok) for (const el of (await r.json()).elements || []) {
+        const lat = el.lat ?? el.center?.lat, lng = el.lon ?? el.center?.lon, num = el.tags['addr:housenumber'];
+        String(num).split(/[;,]/).forEach(n => add(n.trim(), lat, lng, `${n.trim()} ${s.name} ${s.postcode} ${s.city}`));
+      }
+    } catch (err) {}
+
+    if (!found.size) return streetMsg('Aucun numéro trouvé pour cette rue.');
+    const existing = new Set(points.map(p => norm(p.adresse)));
+    const added = [];
+    for (const a of found.values()) {
+      if (existing.has(norm(a.label))) continue;
+      const pt = {id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), lat: a.lat, lng: a.lng, acc: null,
+        adresse: a.label, date: null, note: '', etat: 'prevu', num: parseInt(a.num, 10) || null};
+      points.push(pt); draw(pt); added.push(pt);
+    }
+    save(); renderList();
+    const skipped = found.size - added.length;
+    streetMsg(`${added.length} adresse(s) ajoutée(s)` + (skipped ? `, ${skipped} déjà présente(s).` : '.'));
+    toast(`${added.length} adresse(s) ajoutée(s) — en gris, à visiter`);
+    const all = [...found.values()];
+    openSheet(null);
+    map.fitBounds(L.latLngBounds(all.map(a => [a.lat, a.lng])).pad(.15), {maxZoom: 18});
+    centered = true;
+  }
 
   // ---------- Démarrage ----------
   points.forEach(draw);
