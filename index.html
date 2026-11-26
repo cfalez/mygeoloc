@@ -393,23 +393,47 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
       const k = norm(num).replace(/ /g, '');
       if (k && !found.has(k) && isFinite(lat) && isFinite(lng)) found.set(k, {num: String(num), lat, lng, label});
     };
-    // 1) Base Adresse Nationale : une requête par chiffre de tête pour dépasser la limite de 50 résultats
-    const queries = ['', '1', '2', '3', '4', '5', '6', '7', '8', '9'].map(d => (d ? d + ' ' : '') + s.name);
-    const res = await Promise.allSettled(queries.map(q => geoSearch({q, type: 'housenumber', citycode: s.citycode, limit: 50})));
-    for (const r of res) if (r.status === 'fulfilled') for (const f of r.value) {
-      const p = f.properties || {};
-      if (norm(p.street) === norm(s.name) && p.housenumber) add(p.housenumber, f.geometry.coordinates[1], f.geometry.coordinates[0], p.label);
-    }
-    // 2) Complément OpenStreetMap, pour les numéros qui manqueraient
+    const addBan = (features, k) => {   // vrai seulement si le numéro demandé (k, k bis…) existe
+      let hit = false;
+      for (const f of features) {
+        const p = f.properties || {};
+        if (norm(p.street) !== norm(s.name) || !p.housenumber) continue;
+        add(p.housenumber, f.geometry.coordinates[1], f.geometry.coordinates[0], p.label);
+        if (parseInt(p.housenumber, 10) === k) hit = true;
+      }
+      return hit;
+    };
+    // 1) OpenStreetMap en premier : une seule requête, et donne une idée du plus grand numéro
+    let maxOsm = 0; const osm = [];
     try {
       const re = s.name.replace(/[.*+?^${}()|[\]\\]/g, '\\$&').replace(/"/g, '\\"');
       const ql = `[out:json][timeout:25];area["ref:INSEE"="${s.citycode}"]["boundary"="administrative"]->.a;nwr(area.a)["addr:housenumber"]["addr:street"~"^${re}$",i];out center;`;
       const r = await fetch('https://overpass-api.de/api/interpreter', {method: 'POST', body: new URLSearchParams({data: ql})});
       if (r.ok) for (const el of (await r.json()).elements || []) {
         const lat = el.lat ?? el.center?.lat, lng = el.lon ?? el.center?.lon, num = el.tags['addr:housenumber'];
-        String(num).split(/[;,]/).forEach(n => add(n.trim(), lat, lng, `${n.trim()} ${s.name} ${s.postcode} ${s.city}`));
+        String(num).split(/[;,]/).forEach(n => {
+          maxOsm = Math.max(maxOsm, parseInt(n, 10) || 0);
+          osm.push([n.trim(), lat, lng]);
+        });
       }
     } catch (err) {}
+
+    // 2) Base Adresse Nationale : elle ne renvoie que le numéro exact demandé,
+    //    donc on interroge 1, 2, 3… par paquets de 10, jusqu'à 30 numéros de suite sans résultat
+    let n = 1, lastHit = 0, failures = 0;
+    while (n <= Math.max(lastHit, maxOsm) + 30 && n <= 2000) {
+      const batch = Array.from({length: 10}, (_, i) => n + i);
+      streetMsg(`Récupération des numéros de ${s.name}… (n° ${n}) — ${found.size} trouvé(s)`);
+      const res = await Promise.allSettled(batch.map(k => geoSearch({q: `${k} ${s.name}`, type: 'housenumber', citycode: s.citycode, limit: 5})));
+      res.forEach((r, i) => {
+        if (r.status === 'fulfilled') { if (addBan(r.value, batch[i])) lastHit = batch[i]; }
+        else failures++;
+      });
+      if (failures > 20) break;   // service indisponible : on garde ce qu'on a
+      n += 10;
+    }
+    // les numéros OSM complètent ceux que la BAN n'a pas (bis, ter…)
+    osm.forEach(([num, lat, lng]) => add(num, lat, lng, `${num} ${s.name} ${s.postcode} ${s.city}`));
 
     if (!found.size) return streetMsg('Aucun numéro trouvé pour cette rue.');
     const existing = new Set(points.map(p => norm(p.adresse)));
