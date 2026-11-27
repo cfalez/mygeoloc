@@ -23,6 +23,8 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
 #gps{font-size:13px;white-space:nowrap;display:flex;align-items:center;gap:6px;opacity:.9}
 #gps i{width:9px;height:9px;border-radius:50%;background:#9aa7b5}
 #gps.ok i{background:#4cd964}#gps.ko i{background:#ff5a5a}
+#net{font-size:12px;font-weight:700;padding:3px 8px;border-radius:6px;background:#ff5a5a;color:#fff;white-space:nowrap}
+#net[hidden]{display:none}
 #listBtn,#streetBtn{min-height:40px;padding:0 12px;border:1px solid rgba(255,255,255,.35);border-radius:10px;background:rgba(255,255,255,.12);color:#fff;font-weight:600;white-space:nowrap}
 
 #ring{position:fixed;z-index:1000;left:50%;transform:translateX(-50%);bottom:calc(env(safe-area-inset-bottom) + 26px);
@@ -81,6 +83,7 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
 <header>
   <h1>Porte à porte</h1>
   <span id="gps"><i></i><span>GPS…</span></span>
+  <span id="net" hidden>Hors ligne</span>
   <button id="streetBtn" type="button">Rue</button>
   <button id="listBtn" type="button">Liste (0)</button>
 </header>
@@ -100,6 +103,7 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
     <button type="button" id="expCsv">Exporter CSV</button>
     <button type="button" id="expJson">Sauvegarde JSON</button>
     <button type="button" id="impJson">Importer JSON</button>
+    <button type="button" id="cacheZone">Garder cette zone hors ligne</button>
     <button type="button" id="clearTodo">Retirer les non visitées</button>
     <button type="button" id="clearAll" class="danger">Tout effacer</button>
     <input type="file" id="impFile" accept=".json,application/json" hidden>
@@ -129,7 +133,8 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
   let points = [];
   try { points = JSON.parse(localStorage.getItem(KEY)) || []; } catch (e) { points = []; }
   points.forEach(p => { if (!p.etat) p.etat = 'sonne'; });   // 'prevu' = à visiter, 'sonne' = visité
-  const norm = s => String(s ?? '').normalize('NFD').replace(/[̀-ͯ]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const norm = s => String(s ?? '').normalize('NFD').replace(/[\u0300-\u036f]/g, '').toLowerCase().replace(/[^a-z0-9]+/g, ' ').trim();
+  const touch = pt => { pt.maj = new Date().toISOString(); };   // date de dernière modification, pour la future synchro
   const save = () => { try { localStorage.setItem(KEY, JSON.stringify(points)); } catch (e) { toast('Sauvegarde impossible sur cet appareil'); } };
 
   let toastTimer;
@@ -141,7 +146,7 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
   // ---------- Carte ----------
   const map = L.map('map', {zoomControl: false}).setView([46.6, 2.4], 6);
   L.tileLayer('https://tile.openstreetmap.org/{z}/{x}/{y}.png', {
-    maxZoom: 19, attribution: '© OpenStreetMap'
+    maxZoom: 19, attribution: '© OpenStreetMap', crossOrigin: true
   }).addTo(map);
 
   // ---------- Position en direct ----------
@@ -178,24 +183,26 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
       `https://data.geopf.fr/geocodage/reverse?lon=${lng}&lat=${lat}&limit=1`,
       `https://api-adresse.data.gouv.fr/reverse/?lon=${lng}&lat=${lat}&limit=1`
     ];
+    let answered = false;
     for (const u of urls) {
       try {
-        const r = await fetch(u); if (!r.ok) continue;
+        const r = await fetch(u); answered = true; if (!r.ok) continue;
         const j = await r.json(); const f = j.features && j.features[0];
         if (f && f.properties && f.properties.label) return f.properties.label;
       } catch (e) {}
     }
     try { // repli hors France : OpenStreetMap Nominatim
       const r = await fetch(`https://nominatim.openstreetmap.org/reverse?format=jsonv2&zoom=18&lat=${lat}&lon=${lng}`, {headers: {'Accept-Language': 'fr'}});
+      answered = true;
       if (r.ok) { const j = await r.json(); if (j.display_name) return j.display_name; }
     } catch (e) {}
-    return null;
+    return answered ? null : undefined;   // undefined = aucun service joignable (hors ligne)
   }
 
   // ---------- Points ----------
   const markers = {};
   const icon = (moving, etat) => L.divIcon({className: 'pin' + (etat === 'prevu' ? ' todo' : '') + (moving ? ' moving' : ''), html: '<span></span>', iconSize: [28, 36], iconAnchor: [14, 34], popupAnchor: [0, -30]});
-  const addrText = pt => pt.adresse || 'Recherche de l’adresse…';
+  const addrText = pt => pt.adresse || (pt.attente ? 'Adresse à retrouver quand le réseau reviendra' : 'Recherche de l’adresse…');
 
   function refreshAddr(pt) {
     document.querySelectorAll('.addr').forEach(el => { if (el.dataset.id === pt.id) el.textContent = addrText(pt); });
@@ -215,13 +222,13 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
         <button type="button" data-a="del" class="danger">Supprimer</button>
       </div>`;
     const ta = d.querySelector('textarea');
-    ta.addEventListener('input', () => { pt.note = ta.value; save(); });
+    ta.addEventListener('input', () => { pt.note = ta.value; touch(pt); save(); });
     ta.addEventListener('change', renderList);
     d.addEventListener('click', e => {
       const a = e.target.dataset && e.target.dataset.a; if (!a) return;
       const m = markers[pt.id];
       if (a === 'ring') {
-        pt.etat = 'sonne'; pt.date = new Date().toISOString(); save();
+        pt.etat = 'sonne'; pt.date = new Date().toISOString(); touch(pt); save();
         m.setIcon(icon(false, pt.etat)); m.closePopup(); m.openPopup(); renderList();
       }
       if (a === 'move') { m.closePopup(); m.setIcon(icon(true, pt.etat)); m.dragging.enable(); toast('Fais glisser le point à sa bonne place'); }
@@ -240,7 +247,7 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
     m.dragging.disable();
     m.bindPopup(() => popup(pt), {minWidth: 240, maxWidth: 300});
     m.on('dragend', () => {
-      const ll = m.getLatLng(); pt.lat = ll.lat; pt.lng = ll.lng; pt.acc = null;
+      const ll = m.getLatLng(); pt.lat = ll.lat; pt.lng = ll.lng; pt.acc = null; touch(pt);
       m.dragging.disable(); m.setIcon(icon(false, pt.etat)); save(); m.openPopup();
       if (pt.etat !== 'prevu') locate(pt);   // une adresse de la BAN garde son libellé officiel
     });
@@ -249,15 +256,17 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
   }
 
   async function locate(pt) {
-    pt.adresse = ''; refreshAddr(pt);
+    pt.adresse = ''; pt.attente = false; refreshAddr(pt);
     const a = await geocode(pt.lat, pt.lng);
-    pt.adresse = a || `${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)} (adresse non trouvée)`;
-    save(); refreshAddr(pt); renderList();
+    if (a === undefined) pt.attente = true;   // hors ligne : on réessaiera au retour du réseau
+    else pt.adresse = a || `${pt.lat.toFixed(5)}, ${pt.lng.toFixed(5)} (adresse non trouvée)`;
+    touch(pt); save(); refreshAddr(pt); renderList();
   }
 
   function addPoint(lat, lng, acc) {
     const pt = {id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), lat, lng,
       acc: acc ? Math.round(acc) : null, adresse: '', date: new Date().toISOString(), note: '', etat: 'sonne'};
+    touch(pt);
     points.push(pt); save(); renderList();
     const m = draw(pt);
     map.setView([lat, lng], Math.max(map.getZoom(), 18));
@@ -335,7 +344,7 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
         if (!p || !p.id || typeof p.lat !== 'number' || typeof p.lng !== 'number' || points.some(x => x.id === p.id)) continue;
         const etat = p.etat === 'prevu' ? 'prevu' : 'sonne';
         const pt = {id: String(p.id), lat: p.lat, lng: p.lng, acc: p.acc ?? null, adresse: String(p.adresse ?? ''),
-          date: p.date || (etat === 'prevu' ? null : new Date().toISOString()), note: String(p.note ?? ''), etat, num: p.num ?? null};
+          date: p.date || (etat === 'prevu' ? null : new Date().toISOString()), note: String(p.note ?? ''), etat, num: p.num ?? null, maj: p.maj || new Date().toISOString(), attente: !!p.attente};
         points.push(pt); draw(pt); n++;
       }
       save(); renderList(); toast(`${n} point(s) importé(s)`);
@@ -378,7 +387,7 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
       streetMsg('Choisis la rue :');
       $('streetList').innerHTML = streetResults.map((f, i) => `
         <li><button type="button" data-i="${i}"><b>${esc(f.properties.name)}</b><small>${esc(f.properties.postcode)} ${esc(f.properties.city)}</small></button></li>`).join('');
-    } catch (err) { streetMsg('Le service d’adresses ne répond pas. Vérifie ta connexion et réessaie.'); }
+    } catch (err) { streetMsg(navigator.onLine ? 'Le service d’adresses ne répond pas. Réessaie dans un instant.' : 'Pas de réseau : la recherche de rue a besoin d’internet. Les épingles déjà posées restent utilisables.'); }
   });
 
   $('streetList').addEventListener('click', e => {
@@ -442,6 +451,7 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
       if (existing.has(norm(a.label))) continue;
       const pt = {id: Date.now().toString(36) + Math.random().toString(36).slice(2, 6), lat: a.lat, lng: a.lng, acc: null,
         adresse: a.label, date: null, note: '', etat: 'prevu', num: parseInt(a.num, 10) || null};
+      touch(pt);
       points.push(pt); draw(pt); added.push(pt);
     }
     save(); renderList();
@@ -450,13 +460,62 @@ header h1{font-size:18px;margin:0;flex:1;white-space:nowrap;overflow:hidden;text
     toast(`${added.length} adresse(s) ajoutée(s) — en gris, à visiter`);
     const all = [...found.values()];
     openSheet(null);
-    map.fitBounds(L.latLngBounds(all.map(a => [a.lat, a.lng])).pad(.15), {maxZoom: 18});
+    const zone = L.latLngBounds(all.map(a => [a.lat, a.lng])).pad(.15);
+    map.fitBounds(zone, {maxZoom: 18});
     centered = true;
+    cacheArea(zone, 15, 19).then(r => { if (r.ok) toast(`Carte de la rue gardée pour le hors ligne (${r.ok} morceaux)`); });
   }
+
+  // ---------- Hors ligne ----------
+  // Télécharge les tuiles d'une zone : le service worker (sw.js) les garde en cache.
+  // Limité à quelques centaines de tuiles pour respecter les règles d'usage d'OpenStreetMap.
+  const lon2x = (lng, z) => Math.floor((lng + 180) / 360 * 2 ** z);
+  const lat2y = (lat, z) => { const r = lat * Math.PI / 180; return Math.floor((1 - Math.log(Math.tan(r) + 1 / Math.cos(r)) / Math.PI) / 2 * 2 ** z); };
+  async function cacheArea(b, zMin, zMax, max = 400) {
+    if (!navigator.serviceWorker || !navigator.serviceWorker.controller) return {ok: 0, total: 0, noSw: true};
+    const urls = [];
+    for (let z = zMin; z <= zMax; z++) {
+      for (let x = lon2x(b.getWest(), z); x <= lon2x(b.getEast(), z); x++)
+        for (let y = lat2y(b.getNorth(), z); y <= lat2y(b.getSouth(), z); y++) urls.push(`https://tile.openstreetmap.org/${z}/${x}/${y}.png`);
+    }
+    if (urls.length > max) return {ok: 0, total: urls.length, tooBig: true};
+    let ok = 0;
+    for (let i = 0; i < urls.length; i += 4) {
+      const res = await Promise.allSettled(urls.slice(i, i + 4).map(u => fetch(u, {mode: 'cors'})));
+      ok += res.filter(r => r.status === 'fulfilled' && r.value.ok).length;
+    }
+    return {ok, total: urls.length};
+  }
+  $('cacheZone').addEventListener('click', async () => {
+    if (!navigator.onLine) return toast('Il faut du réseau pour télécharger la carte');
+    const zMin = Math.max(14, map.getZoom() - 1);
+    toast('Téléchargement de la carte de cette zone…', 10000);
+    const r = await cacheArea(map.getBounds(), zMin, 19);
+    if (r.noSw) toast('Recharge la page une fois, puis réessaie');
+    else if (r.tooBig) toast('Zone trop grande : zoome davantage sur le quartier, puis réessaie', 4500);
+    else toast(`Zone gardée hors ligne (${r.ok}/${r.total} morceaux de carte)`);
+  });
+
+  function retryPending() {
+    if (!navigator.onLine) return;
+    points.filter(p => p.attente && p.etat !== 'prevu').reduce((chain, p) => chain.then(() => locate(p)), Promise.resolve());
+  }
+  function setNet() { $('net').hidden = navigator.onLine; }
+  window.addEventListener('online', () => {
+    setNet();
+    const n = points.filter(p => p.attente).length;
+    if (n) toast(`Réseau revenu : recherche de ${n} adresse(s) en attente`);
+    retryPending();
+  });
+  window.addEventListener('offline', () => { setNet(); toast('Hors ligne : tu peux continuer, tout est gardé sur le téléphone'); });
+  setNet();
+  if ('serviceWorker' in navigator) navigator.serviceWorker.register('sw.js').catch(() => {});
+  if (navigator.storage && navigator.storage.persist) navigator.storage.persist().catch(() => {});
 
   // ---------- Démarrage ----------
   points.forEach(draw);
   renderList();
+  retryPending();
   if (points.length && !centered) map.fitBounds(L.latLngBounds(points.map(p => [p.lat, p.lng])).pad(.2), {maxZoom: 18});
   setTimeout(() => toast('Astuce : appui long sur la carte pour placer un point à la main', 4000), 1500);
 }
